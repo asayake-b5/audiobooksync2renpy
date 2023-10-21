@@ -1,0 +1,23 @@
+define narrator = Character(None,
+                            kind = nvl,
+                            what_color="#1d1f20",
+                            # what_outlines = [(2, "#003C78", 0, 0)],
+                            what_justify=False,
+                            what_first_indent = 30,
+                            window_background = "#dfecf4",
+                            what_language="japanese-strict",
+                            window_top_padding = 150,
+                            # what_vertical=True
+                            )
+style ruby_style is default:
+    size 20
+    color "#1d1f20"
+    yoffset -40
+
+style say_dialogue:
+    line_leading 30
+    ruby_style style.ruby_style
+
+style history_text:
+    line_leading 30
+    ruby_style style.ruby_style
