@@ -1,9 +1,21 @@
 use clap::Parser;
 use epub::doc::EpubDoc;
+use getch::Getch;
 use rayon::prelude::{ParallelBridge, ParallelIterator};
 use scraper::{Element, Selector};
 use srtlib::{Subtitle, Subtitles, Timestamp};
-use std::{collections::VecDeque, fmt::Write, fs::File, process::Command};
+use std::{
+    collections::VecDeque,
+    fmt::Write,
+    fs::File,
+    io::Stdout,
+    process::{Command, Stdio},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        mpsc::channel,
+        Arc,
+    },
+};
 
 // TODO watch for panics because of add_millis
 fn timestamp_to_str(mut t: Timestamp, offset: i32) -> String {
@@ -13,8 +25,6 @@ fn timestamp_to_str(mut t: Timestamp, offset: i32) -> String {
     format!("{}.{:0>3}", seconds_total, millis)
 }
 fn subtime_to_renpy(s: &Subtitle) -> String {
-    // dbg!(s);
-    // String::from("aaa")
     format!(
         "<from {} to {}>",
         timestamp_to_str(s.start_time, -100),
@@ -51,30 +61,60 @@ fn replace_rubies(text: &mut String, rubies: &mut VecDeque<[String; 3]>) {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Name of the person to greet
+    /// game folder, not the renpy folder but the folder named "game" inside renpy folder
     #[arg(short, long)]
     game_folder: String,
 
+    /// Audiobook file (mp3)
     #[arg(short, long)]
     audiobook: String,
 
+    /// Subtitle file
     #[arg(short, long)]
     subtitle: String,
 
+    /// Epub (optional, used to parse ruby)
     #[arg(short, long)]
     epub: Option<String>,
 
-    /// Number of times to greet
+    /// Render a splitted audio or not
     #[arg(long, default_value_t = false)]
     split: bool,
 
-    ///Show bugged furiganas attempts
+    ///Show bugged furigana attempts
     #[arg(long, default_value_t = false)]
     show_buggies: bool,
 }
 fn main() {
     let args = Args::parse();
     let mut rubies = None;
+
+    let gch = Getch::new();
+    let contin = Arc::new(AtomicBool::new(true));
+    let contin_thread = contin.clone();
+    let contin_ctrlc = contin.clone();
+
+    ctrlc::set_handler(move || {
+        println!(
+            "Shutting gracefully, please wait a moment for the currently converting files to end."
+        );
+        contin_ctrlc.store(false, Ordering::Relaxed);
+    })
+    .expect("Error setting Ctrl-C handler");
+
+    std::thread::spawn(move || loop {
+        let a = gch.getch().unwrap();
+        if a == 113 {
+            println!(
+            "Shutting gracefully, please wait a moment for the currently converting files to end."
+        );
+            contin_thread.store(false, Ordering::Relaxed);
+        }
+    });
+
+    // while contin.load(Ordering::Relaxed) {
+    //     println!("arr");
+    // }
 
     if let Some(input_file) = args.epub {
         let doc = EpubDoc::new(input_file);
@@ -164,41 +204,51 @@ fn main() {
     use std::io::Write;
     file.write_all(res.as_bytes()).unwrap();
     if args.split {
-        subs.iter().enumerate().par_bridge().for_each(|(i, s)| {
-            if s.start_time == s.end_time {
-                Command::new("ffmpeg")
-                    .args([
-                        "-f",
-                        "lavfi",
-                        "-i",
-                        "anullsrc=r=44100:cl=mono",
-                        "-t",
-                        "2",
-                        "-q:a",
-                        "9",
-                        "-acodec",
-                        "libmp3lame",
-                        &format!("{}/audio/audiobook-{i}.mp3", args.game_folder),
-                    ])
-                    .output()
-                    .unwrap();
-            } else {
-                Command::new("ffmpeg")
-                    .args([
-                        "-n",
-                        "-i",
-                        &args.audiobook.to_string(),
-                        "-c",
-                        "copy",
-                        "-ss",
-                        &s.start_time.to_string().replace(',', "."),
-                        "-to",
-                        &s.end_time.to_string().replace(',', "."),
-                        &format!("{}/audio/audiobook-{i}.mp3", args.game_folder),
-                    ])
-                    .output()
-                    .unwrap();
-            }
-        })
+        let n = AtomicUsize::new(0);
+        let m = subs.len();
+        subs.iter()
+            .enumerate()
+            .par_bridge()
+            .for_each(move |(i, s)| {
+                if !contin.load(Ordering::Relaxed) {
+                    return;
+                }
+                if s.start_time == s.end_time {
+                    Command::new("ffmpeg")
+                        .args([
+                            "-f",
+                            "lavfi",
+                            "-i",
+                            "anullsrc=r=44100:cl=mono",
+                            "-t",
+                            "2",
+                            "-q:a",
+                            "9",
+                            "-acodec",
+                            "libmp3lame",
+                            &format!("{}/audio/audiobook-{i}.mp3", args.game_folder),
+                        ])
+                        .spawn()
+                        .unwrap();
+                } else {
+                    Command::new("ffmpeg")
+                        .args([
+                            "-n",
+                            "-i",
+                            &args.audiobook.to_string(),
+                            "-c",
+                            "copy",
+                            "-ss",
+                            &s.start_time.to_string().replace(',', "."),
+                            "-to",
+                            &s.end_time.to_string().replace(',', "."),
+                            &format!("{}/audio/audiobook-{i}.mp3", args.game_folder),
+                        ])
+                        .output()
+                        .unwrap();
+                }
+                n.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                println!("{n:?}/{m} completed!");
+            })
     }
 }

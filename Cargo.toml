@@ -7,7 +7,9 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.4.6", features = ["derive"] }
+ctrlc = { version = "3.4.1", features = ["termination"] }
 epub = "2.1.1"
+getch = "0.3.1"
 rayon = "1.8.0"
 scraper = "0.17.1"
 srtlib = "0.1.7"

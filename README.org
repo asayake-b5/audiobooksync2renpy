@@ -11,18 +11,18 @@ Turn any of your [[https://github.com/kanjieater/AudiobookTextSync][AudiobookTex
 - No overwhelmingly long paragraphs (inspired by [[https://app.readwok.com/lib][readwok]] on that one)
 - Free shot of dopamine every time you click to the next line, keeping your tiktok-corroded brain active and focused on the book
 - Clipboard Sync by design, no need to bother with textractor
-Note that many of these things can be achieved with mpv+extensions+shortcuts, but, a VN’s a VN, it’s more convenient in many ways.
+Note that many of these things can be achieved with mpv+extensions+shortcuts, but hey, a VN’s a VN, it’s more convenient in many ways.
 
 * How To Use
 ** Step 1 - Preparing the Template (do once, keep forever)
 - Download the template from the releases:
-  - Windows(Untested for now):
-  - Linux:
-  - Mac (NOTE: untested, not done for now):
+  - [[https://github.com/asayake-b5/audiobooksync2renpy/releases/download/RenPyTemplate/template-linux.zip][Windows(Untested for now)]]
+  - [[https://github.com/asayake-b5/audiobooksync2renpy/releases/download/RenPyTemplate/template-linux.zip][Linux]]
+  - [[https://github.com/asayake-b5/audiobooksync2renpy/releases/download/RenPyTemplate/template-mac.zip][Mac (NOTE: untested, and can’t test, please report if having issues)]]
 - Extract, yaddi yadda
-- Open `game/gui/nvl.png` in an image editor, and make it look like the way you’d like.
-- Open `script.rpy` and edit values to your liking, following the [[https://www.renpy.org/doc/html/style_properties.html][ren’py style guide]], most notably `what_color` and `color` for text color. Copy that script file elsewhere for later use (before it gets overwritten).
-- Some changes of interest to you might be found in `gui.rpy`, like `gui.text_size`
+- Open =game/gui/nvl.png= in an image editor, and make it look like the way you’d like.
+- Open =script.rpy= and edit values to your liking, following the [[https://www.renpy.org/doc/html/style_properties.html][ren’py style guide]], most notably =what_color= and =color= for text color. Copy that script file elsewhere for later use (before it gets overwritten).
+- Some changes of interest to you might be found in =gui.rpy=, like =gui.text_size=
 - You should now have a working template, that’ll be reused over and over in the future, this won’t have to be done again so long as you keep a copy of this template project somewhere.
 ** Step 2 - Making the visual novel
 - If you don’t have it yet, install ffmpeg.
@@ -34,4 +34,5 @@ placeholder ffmpeg thing
 - Something about seplacing the script-head file with what was made in step 1 (do once)
 - Something about using the seek mode of the tool, to find a good offset easily
 - Then something about splicing files (explain that game can be played while it’s ongoing, and explain why splicing over keeping the seek time)
+- Be wary of Ctrl-C ing, it may mess up some audio files. Type q if you want to interrupt the splitting gracefully.
 - Done!
