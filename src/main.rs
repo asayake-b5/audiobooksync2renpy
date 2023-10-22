@@ -186,6 +186,9 @@ fn main() {
     writeln!(res, "{}", head).unwrap();
     writeln!(res, "label start:").unwrap();
     subs.iter().enumerate().for_each(|(i, s)| {
+        if i % 10 == 0 {
+            writeln!(res, "    $renpy.force_autosave()").unwrap();
+        }
         if args.split {
             writeln!(res, "    voice \"audiobook-{}.mp3\"", i).unwrap();
         } else {
