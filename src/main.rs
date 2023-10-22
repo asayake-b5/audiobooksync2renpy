@@ -8,27 +8,25 @@ use std::{
     collections::VecDeque,
     fmt::Write,
     fs::File,
-    io::Stdout,
-    process::{Command, Stdio},
+    process::Command,
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
-        mpsc::channel,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
 };
 
 // TODO watch for panics because of add_millis
-fn timestamp_to_str(mut t: Timestamp, offset: i32) -> String {
-    t.add_milliseconds(offset);
+fn timestamp_to_str(t: Timestamp) -> String {
     let (hours, mins, secs, millis) = t.get();
     let seconds_total: u64 = u64::from(hours) * 3600 + u64::from(mins) * 60 + u64::from(secs);
     format!("{}.{:0>3}", seconds_total, millis)
 }
+
 fn subtime_to_renpy(s: &Subtitle) -> String {
     format!(
         "<from {} to {}>",
-        timestamp_to_str(s.start_time, -100),
-        timestamp_to_str(s.end_time, 100)
+        timestamp_to_str(s.start_time),
+        timestamp_to_str(s.end_time)
     )
 }
 
@@ -84,6 +82,14 @@ struct Args {
     ///Show bugged furigana attempts
     #[arg(long, default_value_t = false)]
     show_buggies: bool,
+
+    ///Start offset
+    #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
+    start_offset: i32,
+
+    ///End offset
+    #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
+    end_offset: i32,
 }
 fn main() {
     let args = Args::parse();
@@ -111,10 +117,6 @@ fn main() {
             contin_thread.store(false, Ordering::Relaxed);
         }
     });
-
-    // while contin.load(Ordering::Relaxed) {
-    //     println!("arr");
-    // }
 
     if let Some(input_file) = args.epub {
         let doc = EpubDoc::new(input_file);
@@ -154,14 +156,18 @@ fn main() {
         .to_vec();
 
     subs.sort();
+    let mintime = Timestamp::new(0, 0, 0, args.start_offset.unsigned_abs() as u16);
 
     std::fs::create_dir_all(&format!("{}/audio", args.game_folder)).unwrap();
-    // TODO resume function kinda, maybe shortcut to interrupt
 
     // Collect all subtitle text into a string.
     let mut subs_strings: Vec<String> = Vec::with_capacity(15000);
     let mut buggies: Vec<[String; 3]> = vec![];
-    subs.iter().for_each(|s| {
+    subs.iter_mut().for_each(|s| {
+        if s.start_time > mintime {
+            s.start_time.add_milliseconds(args.start_offset);
+        }
+        s.end_time.add_milliseconds(args.end_offset);
         subs_strings.push(s.text.to_owned());
     });
     if let Some(mut rubies) = rubies {
@@ -183,7 +189,13 @@ fn main() {
         if args.split {
             writeln!(res, "    voice \"audiobook-{}.mp3\"", i).unwrap();
         } else {
-            writeln!(res, "    voice \"{}audiobook.mp3\"", subtime_to_renpy(s)).unwrap();
+            writeln!(
+                res,
+                "    voice \"{}{}\"",
+                subtime_to_renpy(s),
+                &args.audiobook
+            )
+            .unwrap();
         }
         writeln!(res, "    \"{}\"", subs_strings[i]).unwrap();
     });
