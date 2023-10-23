@@ -24,7 +24,8 @@ Note that many of these things can be achieved with mpv+extensions+shortcuts, bu
 3. Open =game/gui/nvl.png= in an image editor, and make it look like the way you’d like.
 4. Open =script.rpy= and edit values to your liking, following the [[https://www.renpy.org/doc/html/style_properties.html][ren’py style guide]], most notably =what_color= and =color= for text color. Copy the contents of this file up to but excluding =label start:= and paste them in =top.txt=
 5. Some changes of interest to you might be found in =gui.rpy=, like =gui.text_size=
-6. You should now have a working template, that’ll be reused over and over in the future, this won’t have to be done again so long as you keep a copy of this template project somewhere.
+6. You can replace =font.ttf= to change fonts (default Noto Sans JP Regular)
+7. You should now have a working template, that’ll be reused over and over in the future, this won’t have to be done again so long as you keep a copy of this template project somewhere.
 ** Step 2 - Making the visual novel
 1. If you don’t have it yet, install ffmpeg.
 2. First, take your audiobook file, and convert it to mp3 (ren’py does not support AAC playing, which your audiobook likely uses).
