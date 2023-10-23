@@ -228,8 +228,15 @@ fn main() {
                 if !contin.load(Ordering::Relaxed) {
                     return;
                 }
-                if s.start_time == s.end_time {
+                let mut command = if cfg!(unix) {
                     Command::new("ffmpeg")
+                } else if cfg!(windows) {
+                    Command::new("ffmpeg.exe")
+                } else {
+                    panic!("Unsupported OS possibly.")
+                };
+                if s.start_time == s.end_time {
+                    command
                         .args([
                             "-f",
                             "lavfi",
@@ -246,7 +253,7 @@ fn main() {
                         .spawn()
                         .unwrap();
                 } else {
-                    Command::new("ffmpeg")
+                    command
                         .args([
                             "-n",
                             "-i",
