@@ -19,7 +19,7 @@ Note that many of these things can be achieved with mpv+extensions+shortcuts, bu
 1. Download the template from the releases:
    - [[https://github.com/asayake-b5/audiobooksync2renpy/releases/download/RenPyTemplate/template-linux.zip][Windows(Untested for now)]]
    - [[https://github.com/asayake-b5/audiobooksync2renpy/releases/download/RenPyTemplate/template-linux.zip][Linux]]
-   - [[https://github.com/asayake-b5/audiobooksync2renpy/releases/download/RenPyTemplate/template-mac.zip][Mac (NOTE: untested, and can’t test, please report if having issues)]]
+   - [[https://github.com/asayake-b5/audiobooksync2renpy/releases/download/RenPyTemplate/template-mac.zip][Mac (NOTE: untested, and can’t test, please report if having issues, I’m not even sure if this is for x86 or ARM macs)]]
 2. Extract, yaddi yadda
 3. Open =game/gui/nvl.png= in an image editor, and make it look like the way you’d like.
 4. Open =script.rpy= and edit values to your liking, following the [[https://www.renpy.org/doc/html/style_properties.html][ren’py style guide]], most notably =what_color= and =color= for text color. Copy the contents of this file up to but excluding =label start:= and paste them in =top.txt=
@@ -27,33 +27,43 @@ Note that many of these things can be achieved with mpv+extensions+shortcuts, bu
 6. You can replace =font.ttf= to change fonts (default Noto Sans JP Regular)
 7. You should now have a working template, that’ll be reused over and over in the future, this won’t have to be done again so long as you keep a copy of this template project somewhere.
 ** Step 2 - Making the visual novel
-1. If you don’t have it yet, install ffmpeg.
-2. First, take your audiobook file, and convert it to mp3 (ren’py does not support AAC playing, which your audiobook likely uses).
+1. Download the release of audiobook2renpy:
+   - [[https://github.com/asayake-b5/audiobooksync2renpy/releases/download/audiobook2renpy/audiobook2renpy-linux-amd64.zip][Linux]]
+   - [[https://github.com/asayake-b5/audiobooksync2renpy/releases/download/audiobook2renpy/audiobook2renpy-win-amd64.zip][Windows x86-64]]
+   - Mac, Win/Linux ARM: plase build yourself
+2. If you don’t have it yet, install ffmpeg.
+3. First, take your audiobook file, and convert it to mp3 (ren’py does not support AAC playing, which your audiobook likely uses).
    Note: output filenames are completely up to you, I just gave them a comprehensible name here.
    #+begin_src bash
  ffmpeg -i "youraudiobook.m4a" -acodec libmp3lame "audiobook.mp3"
    #+end_src
    - Paste that mp3 file to game/audio in the renpy folder
-3. If your subtitle is in .vtt format, convert it to .srt
+4. If your subtitle is in .vtt format, convert it to .srt
    #+begin_src bash
  ffmpeg -i "yoursubs.vtt" -c:s subrip "subtitles.srt"
    #+end_src
-4. First, let’s make a "dry run" of the utility, using the whole length mp3 file.
+5. First, let’s make a "dry run" of the utility, using the whole length mp3 file.
    #+begin_src bash
 ./audiobook2renpy --game-folder path/to/game/ --audiobook audiobook.mp3 --subtitle subtitles.srt --start-offset -100 --end-offset 100
    #+end_src
    - Play with the offsets (positive or negative values), until it starts sounding good, unfortunately no miracle here, trial and error is the key, thankfully it only takes a couple seconds per try.
-5. Then, once you found offsets that seem good, it’s time to start splitting the files. We have to do it or, unfortunately, by the middle of the book, lines will take several seconds to start playing, not fun.
+6. Then, once you found offsets that seem good, it’s time to start splitting the files. We have to do it or, unfortunately, by the middle of the book, lines will take several seconds to start playing, not fun.
    #+begin_src bash
 ./audiobook2renpy --game-folder path/to/game/ --audiobook audiobook.mp3 --subtitle subtitles.srt --start-offset offset --end-offset offset --epub yourepub.epub --split
    #+end_src
    - We use the occasion here to specify the epub as well. This is optional but this allows us to specify furigana. Some might still fail to be recognized (you can see them with --show-buggies (beware spoilers)) but most should be catched.
    - This might take a while. Feel free to start playing once you reach a hundred or so completed files and while it’s running, that should be enough buffer to never catch up to it.
-6. Be wary of Ctrl-C ing, it may mess up some audio files. Type q if you want to interrupt the splitting gracefully. It’ll quickly resume back to where you were next time you run it, so don’t hesitate to use it!
-7. Done!
+7. Be wary of Ctrl-C ing, it may mess up some audio files. Type q if you want to interrupt the splitting gracefully. It’ll quickly resume back to where you were next time you run it, so don’t hesitate to use it!
+8. Done!
 
 * Status
 
 This is "beta" software, it has some flaws that aren’t really fixable (especially on subtitles generated on older version of AudioTextSync), but it is very much usable. Most notably sometimes a line voice will cover slightly more than the displayed text, and the next line will have a way shorter one to compensate.
 
 Feature wise, it is more or less complete, I am currently investigating adding illustrations from the epub, but this might be a risky can of worms when it comes to spoilers, so I’m unsure what to do yet on that point (nonetheless it’ll be flagged behind an option, for people who’d rather not take the risk). This, improving the renpy template and possibly mitigating the issue above are the only things that might change, so despite being "beta", it’s also "stable".
+
+* Building
+Assuming rust installed. If not [[https://rustup.rs/][Rustup]]
+#+begin_src bash
+cargo build --release
+#+end_src
