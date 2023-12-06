@@ -135,7 +135,8 @@ fn main() {
                         let context = element.parent_element().unwrap().text().collect::<String>();
 
                         if es.len() != 2 {
-                            panic!("weirdly formated rubies idk? TODO better handling");
+                            dbg!(&es);
+                            println!("weirdly formated rubies idk? TODO better handling");
                         }
 
                         rubies_2.push_back([
