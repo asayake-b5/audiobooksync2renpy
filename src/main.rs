@@ -15,7 +15,6 @@ use std::{
     },
 };
 
-// TODO watch for panics because of add_millis
 fn timestamp_to_str(t: Timestamp) -> String {
     let (hours, mins, secs, millis) = t.get();
     let seconds_total: u64 = u64::from(hours) * 3600 + u64::from(mins) * 60 + u64::from(secs);
@@ -31,6 +30,30 @@ fn subtime_to_renpy(s: &Subtitle) -> String {
 }
 
 fn replace_rubies(text: &mut String, rubies: &mut VecDeque<[String; 3]>) {
+    if rubies.get(0).is_none() {
+        return;
+    }
+    let mut queue: Vec<[String; 2]> = Vec::with_capacity(5);
+    while textdistance::str::overlap(&rubies[0][2], text) > 0.5 && text.contains(&rubies[0][0]) {
+        let front = rubies.pop_front().unwrap();
+        queue.push([front[0].clone(), front[1].clone()]);
+        if rubies.is_empty() {
+            break;
+        }
+    }
+    while let Some(replacement) = queue.pop() {
+        *text = text.replace(
+            &replacement[0].to_string(),
+            &format!(
+                "{{rb}}{}{{/rb}}{{rt}}{}{{/rt}}",
+                replacement[0], replacement[1]
+            ),
+        );
+    }
+}
+
+// TODO remake, my assumptions about how audiobooksync srts worked were wrong for furis
+fn replace_rubies_old(text: &mut String, rubies: &mut VecDeque<[String; 3]>) {
     if rubies.get(0).is_none() {
         return;
     }
