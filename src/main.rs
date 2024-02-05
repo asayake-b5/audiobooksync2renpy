@@ -1,300 +1,315 @@
-use clap::Parser;
-use epub::doc::EpubDoc;
-use getch::Getch;
-use rayon::prelude::{ParallelBridge, ParallelIterator};
-use scraper::{Element, Selector};
-use srtlib::{Subtitle, Subtitles, Timestamp};
-use std::{
-    collections::VecDeque,
-    fmt::Write,
-    fs::File,
-    process::Command,
-    sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc,
+use std::path::PathBuf;
+
+use process::MyArgs;
+use relm4::{
+    gtk::{
+        self,
+        prelude::{BoxExt, GtkWindowExt, OrientableExt},
+        Adjustment, FileFilter,
     },
+    Component, ComponentController, ComponentParts, ComponentSender, Controller, RelmWidgetExt,
+    SimpleComponent,
+};
+use relm4_components::{
+    open_button::{OpenButton, OpenButtonSettings},
+    open_dialog::OpenDialogSettings,
 };
 
-fn timestamp_to_str(t: Timestamp) -> String {
-    let (hours, mins, secs, millis) = t.get();
-    let seconds_total: u64 = u64::from(hours) * 3600 + u64::from(mins) * 60 + u64::from(secs);
-    format!("{}.{:0>3}", seconds_total, millis)
+pub mod process;
+
+struct AppModel {
+    open_game: Controller<OpenButton>,
+    game_path: PathBuf,
+    open_srt: Controller<OpenButton>,
+    srt_path: PathBuf,
+    open_audio: Controller<OpenButton>,
+    audio_path: PathBuf,
+    open_epub: Controller<OpenButton>,
+    epub_path: PathBuf,
 }
 
-fn subtime_to_renpy(s: &Subtitle) -> String {
-    format!(
-        "<from {} to {}>",
-        timestamp_to_str(s.start_time),
-        timestamp_to_str(s.end_time)
-    )
+#[derive(Debug)]
+enum DialogOrigin {
+    Audio,
+    Game,
+    Srt,
+    Epub,
 }
 
-fn replace_rubies(text: &mut String, rubies: &mut VecDeque<[String; 3]>) {
-    if rubies.get(0).is_none() {
-        return;
-    }
-    let mut queue: Vec<[String; 2]> = Vec::with_capacity(5);
-    while textdistance::str::overlap(&rubies[0][2], text) > 0.5 && text.contains(&rubies[0][0]) {
-        let front = rubies.pop_front().unwrap();
-        queue.push([front[0].clone(), front[1].clone()]);
-        if rubies.is_empty() {
-            break;
-        }
-    }
-    while let Some(replacement) = queue.pop() {
-        *text = text.replace(
-            &replacement[0].to_string(),
-            &format!(
-                "{{rb}}{}{{/rb}}{{rt}}{}{{/rt}}",
-                replacement[0], replacement[1]
-            ),
-        );
-    }
+#[derive(Debug)]
+enum AppInMsg {
+    Recheck,
+    Open(PathBuf, DialogOrigin),
 }
 
-// TODO remake, my assumptions about how audiobooksync srts worked were wrong for furis
-fn replace_rubies_old(text: &mut String, rubies: &mut VecDeque<[String; 3]>) {
-    if rubies.get(0).is_none() {
-        return;
-    }
-    let mut queue: Vec<[String; 2]> = Vec::with_capacity(5);
-    while textdistance::str::overlap(&rubies[0][2], text) > 0.5
-        && text.contains(&format!("{}{}", &rubies[0][0], &rubies[0][1]))
-    {
-        let front = rubies.pop_front().unwrap();
-        queue.push([front[0].clone(), front[1].clone()]);
-        if rubies.is_empty() {
-            break;
-        }
-    }
-    while let Some(replacement) = queue.pop() {
-        *text = text.replace(
-            &format!("{}{}", replacement[0], replacement[1]),
-            &format!(
-                "{{rb}}{}{{/rb}}{{rt}}{}{{/rt}}",
-                replacement[0], replacement[1]
-            ),
-        );
-    }
-}
+#[relm4::component]
+impl SimpleComponent for AppModel {
+    type Input = AppInMsg;
 
-/// Convert a srt audiobook to a renpy visual novel
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    /// game folder, not the renpy folder but the folder named "game" inside renpy folder
-    #[arg(short, long)]
-    game_folder: String,
+    type Output = ();
+    type Init = u8;
 
-    /// Audiobook file (mp3)
-    #[arg(short, long)]
-    audiobook: String,
-
-    /// Subtitle file
-    #[arg(short, long)]
-    subtitle: String,
-
-    /// Epub (optional, used to parse ruby)
-    #[arg(short, long)]
-    epub: Option<String>,
-
-    /// Render a splitted audio or not
-    #[arg(long, default_value_t = false)]
-    split: bool,
-
-    ///Show bugged furigana attempts
-    #[arg(long, default_value_t = false)]
-    show_buggies: bool,
-
-    ///Start offset
-    #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
-    start_offset: i32,
-
-    ///End offset
-    #[arg(long, default_value_t = 0, allow_hyphen_values = true)]
-    end_offset: i32,
-}
-fn main() {
-    let args = Args::parse();
-    let mut rubies = None;
-
-    let gch = Getch::new();
-    let contin = Arc::new(AtomicBool::new(true));
-    let contin_thread = contin.clone();
-    let contin_ctrlc = contin.clone();
-
-    ctrlc::set_handler(move || {
-        println!(
-            "Shutting gracefully, please wait a moment for the currently converting files to end."
-        );
-        contin_ctrlc.store(false, Ordering::Relaxed);
-    })
-    .expect("Error setting Ctrl-C handler");
-
-    std::thread::spawn(move || loop {
-        let a = gch.getch().unwrap();
-        if a == 113 {
-            println!(
-            "Shutting gracefully, please wait a moment for the currently converting files to end."
-        );
-            contin_thread.store(false, Ordering::Relaxed);
-        }
-    });
-
-    if let Some(input_file) = args.epub {
-        let doc = EpubDoc::new(input_file);
-        assert!(doc.is_ok());
-        let mut doc = doc.unwrap();
-        let mut rubies_2: VecDeque<[String; 3]> = VecDeque::with_capacity(1000);
-
-        while doc.go_next() {
-            let current = doc.get_current_str();
-            match current {
-                Some((v, _)) => {
-                    let document = scraper::Html::parse_document(&v);
-                    let selector_ruby = Selector::parse("ruby").unwrap();
-                    for element in document.select(&selector_ruby) {
-                        let es = element.text().collect::<Vec<&str>>();
-                        let context = element.parent_element().unwrap().text().collect::<String>();
-
-                        if es.len() != 2 {
-                            dbg!(&es);
-                            println!("weirdly formated rubies idk? TODO better handling");
-                        }
-
-                        rubies_2.push_back([
-                            es[0].to_owned(),
-                            es[1].to_owned(),
-                            context.to_owned(),
-                        ]);
-                    }
-                }
-                None => println!("Not Found\n"),
-            }
-        }
-        rubies = Some(rubies_2);
-    }
-
-    let mut subs = Subtitles::parse_from_file(args.subtitle, Some("utf8"))
-        .unwrap()
-        .to_vec();
-
-    subs.sort();
-    let mintime = Timestamp::new(0, 0, 0, args.start_offset.unsigned_abs() as u16);
-
-    std::fs::create_dir_all(&format!("{}/audio", args.game_folder)).unwrap();
-
-    // Collect all subtitle text into a string.
-    let mut subs_strings: Vec<String> = Vec::with_capacity(15000);
-    let mut buggies: Vec<[String; 3]> = vec![];
-    subs.iter_mut().for_each(|s| {
-        if s.start_time > mintime {
-            s.start_time.add_milliseconds(args.start_offset);
-        }
-        s.end_time.add_milliseconds(args.end_offset);
-        subs_strings.push(s.text.to_owned());
-    });
-    if let Some(mut rubies) = rubies {
-        while !rubies.is_empty() {
-            subs_strings.iter_mut().for_each(|s| {
-                replace_rubies(s, &mut rubies);
-            });
-            if let Some(ruby_top) = rubies.pop_front() {
-                buggies.push(ruby_top);
-            }
-        }
-    }
-
-    let mut res = String::from("");
-    let head = std::fs::read_to_string("top.txt").expect("Error reading the script top");
-    writeln!(res, "{}", head).unwrap();
-    writeln!(res, "label start:").unwrap();
-    subs.iter().enumerate().for_each(|(i, s)| {
-        if i % 10 == 0 {
-            writeln!(res, "    $renpy.force_autosave()").unwrap();
-        }
-        if args.split {
-            writeln!(res, "    voice \"audiobook-{}.mp3\"", i).unwrap();
-        } else {
-            writeln!(
-                res,
-                "    voice \"{}{}\"",
-                subtime_to_renpy(s),
-                &args.audiobook
-            )
-            .unwrap();
-        }
-        writeln!(res, "    \"{}\"", subs_strings[i]).unwrap();
-    });
-    writeln!(res, "return").unwrap();
-
-    if !buggies.is_empty() {
-        if args.show_buggies {
-            println!("{:?}", buggies);
-        } else {
-            println!(
-                "Some({}) ruby failed to be inserted in, use --show-bugies to display them (beware spoilers)",
-                buggies.len()
-            );
-        }
-    }
-
-    let mut file = File::create(format!("{}/script.rpy", args.game_folder)).unwrap();
-    use std::io::Write;
-    file.write_all(res.as_bytes()).unwrap();
-    if args.split {
-        let n = AtomicUsize::new(0);
-        let m = subs.len();
-        subs.iter()
-            .enumerate()
-            .par_bridge()
-            .for_each(move |(i, s)| {
-                if !contin.load(Ordering::Relaxed) {
-                    return;
-                }
-                let mut command = if cfg!(unix) {
-                    Command::new("ffmpeg")
-                } else if cfg!(windows) {
-                    Command::new("ffmpeg.exe")
-                } else {
-                    panic!("Unsupported OS possibly.")
-                };
-                if s.start_time == s.end_time {
-                    command
-                        .args([
-                            "-f",
-                            "lavfi",
-                            "-i",
-                            "anullsrc=r=44100:cl=mono",
-                            "-t",
-                            "2",
-                            "-q:a",
-                            "9",
-                            "-acodec",
-                            "libmp3lame",
-                            &format!("{}/audio/audiobook-{i}.mp3", args.game_folder),
-                        ])
-                        .spawn()
-                        .unwrap();
-                } else {
-                    command
-                        .args([
-                            "-n",
-                            "-i",
-                            &args.audiobook.to_string(),
-                            "-c",
-                            "copy",
-                            "-ss",
-                            &s.start_time.to_string().replace(',', "."),
-                            "-to",
-                            &s.end_time.to_string().replace(',', "."),
-                            &format!("{}/audio/audiobook-{i}.mp3", args.game_folder),
-                        ])
-                        .output()
-                        .unwrap();
-                }
-                n.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                println!("{n:?}/{m} completed!");
+    // Initialize the UI.
+    fn init(
+        _: Self::Init,
+        root: &Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let open_game = OpenButton::builder()
+            .launch(OpenButtonSettings {
+                dialog_settings: OpenDialogSettings {
+                    folder_mode: true,
+                    cancel_label: String::from("Cancel"),
+                    accept_label: String::from("Select"),
+                    create_folders: true,
+                    is_modal: true,
+                    ..OpenDialogSettings::default()
+                },
+                text: "Open folder",
+                recently_opened_files: None,
+                max_recent_files: 0,
             })
+            .forward(sender.input_sender(), |path| {
+                AppInMsg::Open(path, DialogOrigin::Game)
+            });
+
+        let srt_filter = FileFilter::new();
+        srt_filter.add_pattern("*.srt");
+        srt_filter.set_name(Some("Subtitle files (.srt)"));
+
+        let open_srt = OpenButton::builder()
+            .launch(OpenButtonSettings {
+                dialog_settings: OpenDialogSettings {
+                    folder_mode: false,
+                    cancel_label: String::from("Cancel"),
+                    accept_label: String::from("Select"),
+                    create_folders: true,
+                    is_modal: true,
+                    // filter:
+                    filters: vec![srt_filter],
+                },
+                text: "Open file",
+                recently_opened_files: None,
+                max_recent_files: 0,
+            })
+            .forward(sender.input_sender(), |path| {
+                AppInMsg::Open(path, DialogOrigin::Srt)
+            });
+
+        let audio_filter = FileFilter::new();
+        audio_filter.add_pattern("*.mp3");
+        audio_filter.add_pattern("*.ogg");
+        audio_filter.add_pattern("*.m4b");
+        audio_filter.add_pattern("*.m4a");
+        audio_filter.set_name(Some("Audio files (.mp3, .m4b, .m4a)"));
+
+        let open_audio = OpenButton::builder()
+            .launch(OpenButtonSettings {
+                dialog_settings: OpenDialogSettings {
+                    folder_mode: false,
+                    cancel_label: String::from("Cancel"),
+                    accept_label: String::from("Select"),
+                    create_folders: true,
+                    is_modal: true,
+                    // filter:
+                    filters: vec![audio_filter],
+                },
+                text: "Open file",
+                recently_opened_files: None,
+                max_recent_files: 0,
+            })
+            .forward(sender.input_sender(), |path| {
+                AppInMsg::Open(path, DialogOrigin::Audio)
+            });
+
+        let epub_filter = FileFilter::new();
+        epub_filter.add_pattern("*.epub");
+        epub_filter.set_name(Some("epub files"));
+
+        let open_epub = OpenButton::builder()
+            .launch(OpenButtonSettings {
+                dialog_settings: OpenDialogSettings {
+                    folder_mode: false,
+                    cancel_label: String::from("Cancel"),
+                    accept_label: String::from("Select"),
+                    create_folders: true,
+                    is_modal: true,
+                    // filter:
+                    filters: vec![epub_filter],
+                },
+                text: "Open file",
+                recently_opened_files: None,
+                max_recent_files: 0,
+            })
+            .forward(sender.input_sender(), |path| {
+                AppInMsg::Open(path, DialogOrigin::Epub)
+            });
+
+        let model = AppModel {
+            open_game,
+            open_srt,
+            open_audio,
+            open_epub,
+            game_path: PathBuf::from(""),
+            srt_path: PathBuf::from(""),
+            audio_path: PathBuf::from(""),
+            epub_path: PathBuf::from(""),
+        };
+
+        let widgets = view_output!();
+
+        ComponentParts { model, widgets }
     }
+
+    fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
+        match msg {
+            AppInMsg::Recheck => todo!(),
+            AppInMsg::Open(path, origin) => match origin {
+                DialogOrigin::Audio => self.audio_path = path,
+                DialogOrigin::Game => self.game_path = path,
+                DialogOrigin::Srt => self.srt_path = path,
+                DialogOrigin::Epub => self.epub_path = path,
+            },
+        }
+    }
+
+    view! {
+        gtk::Window {
+            set_title: Some("Audiobook to Ren'py"),
+            set_default_width: 600,
+            set_default_height: 400,
+
+            gtk::Box {
+                set_orientation: gtk::Orientation::Vertical,
+                set_spacing: 5,
+                set_margin_all: 5,
+
+                gtk::Box {
+                    set_spacing: 5,
+                    set_margin_all: 5,
+                    set_orientation: gtk::Orientation::Horizontal,
+                    gtk::Label {
+                        set_label: "Folder to install game in"
+
+                    },
+                    append = model.open_game.widget(),
+                    gtk::Label {
+                        #[watch]
+                        set_label: &model.game_path.to_string_lossy()
+                    }
+                },
+
+                gtk::Box {
+                    set_spacing: 5,
+                    set_margin_all: 5,
+                    set_orientation: gtk::Orientation::Horizontal,
+                    gtk::Label {
+                        set_label: "Path to the .srt file"
+
+                    },
+                    append = model.open_srt.widget(),
+                    gtk::Label {
+                        #[watch]
+                        set_label: &model.srt_path.to_string_lossy()
+                    }
+                },
+                gtk::Box {
+                    set_spacing: 5,
+                    set_margin_all: 5,
+                    set_orientation: gtk::Orientation::Horizontal,
+                    gtk::Label {
+                        set_label: "Path to the audio file"
+                    },
+                    append = model.open_audio.widget(),
+                    gtk::Label {
+                        #[watch]
+                        set_label: &model.audio_path.to_string_lossy()
+                    }
+                },
+
+                gtk::Box {
+                    set_spacing: 5,
+                    set_margin_all: 5,
+                    set_orientation: gtk::Orientation::Horizontal,
+                    gtk::Label {
+                        set_label: "Path to the epub file (optional)"
+                    },
+                    append = model.open_epub.widget(),
+                    gtk::Label {
+                        #[watch]
+                        set_label: &model.epub_path.to_string_lossy()
+                    }
+                },
+
+                gtk::Box {
+                    set_spacing: 5,
+                    set_margin_all: 5,
+                    set_orientation: gtk::Orientation::Horizontal,
+                    gtk::Label {
+                        set_label: "Offsets"
+                    },
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    relm4::gtk::SpinButton::builder()
+                    .adjustment(&Adjustment::new(0.0, -500.0, 500.0, 1.0, 0.0, 0.0))
+                    .build(){
+                    },
+                        gtk::Label {
+                            set_label: "Before (ms)"
+                        }
+                    },
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    relm4::gtk::SpinButton::builder()
+                    .adjustment(&Adjustment::new(0.0, -500.0, 500.0, 1.0, 0.0, 0.0))
+                    .build(){
+                    },
+                        gtk::Label {
+                            set_label: "After (ms)"
+                        }
+                    },
+
+                    // append = spin_offset_before,
+                },
+
+                //   append = if model.show_button {
+                // gtk::Button::with_label("Generate Deck !") {
+                //     connect_clicked[sender] => move |_| {
+                //         sender.input(AppInMsg::Start);
+                //     }
+                // }}
+                // else if model.show_indicator {
+                //     gtk::Spinner {
+                //         set_spinning: true,
+                //     }
+                // }
+                // else {
+                //     gtk::Label{
+                //         set_label: "Please fill all three fields"
+                //     }
+                // },
+
+            }
+        }
+    }
+}
+
+fn main() {
+    // rayon::ThreadPoolBuilder::new()
+    //     .num_threads(4)
+    //     .build_global()
+    //     .unwrap();
+    let args = MyArgs {
+        game_folder: String::from("test/game"),
+        audiobook: String::from("opuss.ogg"),
+        subtitle: String::from("p4v3.srt"),
+        epub: None,
+        split: true,
+        show_buggies: false,
+        start_offset: 0,
+        end_offset: 0,
+    };
+    process::process(args);
+    // let app = RelmApp::new("relm4.test.simple");
+    // app.run::<AppModel>(0);
 }
