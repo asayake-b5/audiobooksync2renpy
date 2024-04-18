@@ -1,8 +1,10 @@
 use epub::doc::EpubDoc;
 use getch::Getch;
+use itertools::Itertools;
 use rayon::prelude::{ParallelBridge, ParallelIterator};
 use scraper::{Element, Selector};
 use srtlib::{Subtitle, Subtitles, Timestamp};
+use std::sync::mpsc::Sender;
 use std::{
     collections::VecDeque,
     fmt::Write,
@@ -17,6 +19,7 @@ use std::{
 
 const CHUNK_SIZE: usize = 25;
 const SILENCE_OGG: &[u8] = include_bytes!("../silence.ogg");
+const SILENCE_MP3: &[u8] = include_bytes!("../silence.mp3");
 
 fn timestamp_to_str(t: Timestamp) -> String {
     let (hours, mins, secs, millis) = t.get();
@@ -91,13 +94,13 @@ fn prepare_ffmpeg_command(
     //TODO off by one here?
     for i in 0..count {
         let n = start + i;
-        let path_str = format!("{}/audio/audiobook-{n}.ogg", game_folder);
+        let path_str = format!("{}/audio/audiobook-{n}.mp3", game_folder);
         let path = PathBuf::from(&path_str);
         if path.exists() {
             continue;
         }
         if s[i].start_time >= s[i].end_time {
-            std::fs::write(&path, SILENCE_OGG).unwrap();
+            std::fs::write(&path, SILENCE_MP3).unwrap();
             continue;
         }
         r.extend(
@@ -116,18 +119,19 @@ fn prepare_ffmpeg_command(
     r
 }
 
+#[derive(Debug)]
 pub struct MyArgs {
-    pub game_folder: String,
-    pub audiobook: String,
-    pub subtitle: String,
-    pub epub: Option<String>,
+    pub game_folder: PathBuf,
+    pub audiobook: PathBuf,
+    pub subtitle: PathBuf,
+    pub epub: Option<PathBuf>,
     pub split: bool,
     pub show_buggies: bool,
     pub start_offset: i32,
     pub end_offset: i32,
 }
 
-pub fn process(args: MyArgs) {
+pub fn process(args: MyArgs, thread_tx: Sender<String>) {
     let mut rubies = None;
 
     let gch = Getch::new();
@@ -194,18 +198,26 @@ pub fn process(args: MyArgs) {
     subs.sort();
     let mintime = Timestamp::new(0, 0, 0, args.start_offset.unsigned_abs() as u16);
 
-    std::fs::create_dir_all(format!("{}/audio", args.game_folder)).unwrap();
+    std::fs::create_dir_all(format!("{}/audio", args.game_folder.display())).unwrap();
 
     // Collect all subtitle text into a string.
     let mut subs_strings: Vec<String> = Vec::with_capacity(15000);
     let mut buggies: Vec<[String; 3]> = vec![];
-    subs.iter_mut().for_each(|s| {
-        if s.start_time > mintime {
-            s.start_time.add_milliseconds(args.start_offset);
+    let mut subs2: Vec<Subtitle> = Vec::with_capacity(20000);
+    subs.iter().tuple_windows().for_each(|(n, np1)| {
+        let mut n2 = n.clone();
+        if n.start_time > mintime {
+            n2.start_time.add_milliseconds(args.start_offset);
         }
-        s.end_time.add_milliseconds(args.end_offset);
-        subs_strings.push(s.text.to_owned());
+        n2.end_time = np1.start_time;
+        n2.end_time.add_milliseconds(args.start_offset);
+        subs2.push(n2);
+        subs_strings.push(n.text.to_owned());
     });
+
+    subs2.push(subs.last().unwrap().clone());
+    subs_strings.push(subs.last().unwrap().text.to_owned());
+
     if let Some(mut rubies) = rubies {
         while !rubies.is_empty() {
             subs_strings.iter_mut().for_each(|s| {
@@ -221,18 +233,18 @@ pub fn process(args: MyArgs) {
     let head = std::fs::read_to_string("top.txt").expect("Error reading the script top");
     writeln!(res, "{}", head).unwrap();
     writeln!(res, "label start:").unwrap();
-    subs.iter().enumerate().for_each(|(i, s)| {
+    subs2.iter().enumerate().for_each(|(i, s)| {
         if i % 10 == 0 {
             writeln!(res, "    $renpy.force_autosave()").unwrap();
         }
         if args.split {
-            writeln!(res, "    voice \"audiobook-{}.ogg\"", i).unwrap();
+            writeln!(res, "    voice \"audiobook-{}.mp3\"", i).unwrap();
         } else {
             writeln!(
                 res,
                 "    voice \"{}{}\"",
                 subtime_to_renpy(s),
-                &args.audiobook
+                &args.audiobook.display()
             )
             .unwrap();
         }
@@ -251,45 +263,69 @@ pub fn process(args: MyArgs) {
         }
     }
 
-    let mut file = File::create(format!("{}/script.rpy", args.game_folder)).unwrap();
+    let mut file = File::create(format!("{}/script.rpy", args.game_folder.display())).unwrap();
     use std::io::Write;
     file.write_all(res.as_bytes()).unwrap();
     if args.split {
         let n = AtomicUsize::new(0);
         let m = subs.len();
-        // TODO benchmark, audiobook2srs don't care about order
-        subs.chunks(CHUNK_SIZE)
+        subs2
+            .chunks(CHUNK_SIZE)
             .enumerate()
             .par_bridge()
             // .par_chunks()
             .for_each(move |(i, s)| {
                 let size = s.len();
-                let prepared = prepare_ffmpeg_command(i * size, size, s, &args.game_folder);
+                let prepared =
+                    prepare_ffmpeg_command(i * size, size, s, &args.game_folder.to_string_lossy()); //TODO
                 if !contin.load(Ordering::Relaxed) {
                     return;
                 }
                 let mut command = if cfg!(unix) {
                     Command::new("ffmpeg")
                 } else if cfg!(windows) {
-                    Command::new("ffmpeg.exe")
+                    Command::new("cmd")
                 } else {
                     panic!("Unsupported OS possibly.")
                 };
-                let args: Vec<String> = [
-                    "-hide_banner".to_string(),
-                    "-loglevel".to_string(),
-                    "error".to_string(),
-                    "-vn".to_string(),
-                    "-y".to_string(),
-                    "-i".to_string(),
-                    args.audiobook.clone(),
-                ]
-                .iter()
-                .chain(prepared.iter())
-                .cloned()
-                .collect();
-                command.args(&args).output().unwrap();
+                let args: Vec<String> = if cfg!(unix) {
+                    [
+                        "-hide_banner".to_string(),
+                        "-loglevel".to_string(),
+                        "error".to_string(),
+                        "-vn".to_string(),
+                        "-y".to_string(),
+                        "-i".to_string(),
+                        args.audiobook.to_string_lossy().to_string(),
+                    ]
+                    .iter()
+                    .chain(prepared.iter())
+                    .cloned()
+                    .collect()
+                } else if cfg!(windows) {
+                    [
+                        "-/C".to_string(),
+                        "ffmpeg.exe".to_string(),
+                        "-hide_banner".to_string(),
+                        "-loglevel".to_string(),
+                        "error".to_string(),
+                        "-vn".to_string(),
+                        "-y".to_string(),
+                        "-i".to_string(),
+                        args.audiobook.to_string_lossy().to_string(),
+                    ]
+                    .iter()
+                    .chain(prepared.iter())
+                    .cloned()
+                    .collect()
+                } else {
+                    panic!("Unsupported OS possibly.")
+                };
+
+                let child = command.args(&args).output().unwrap();
+                // dbg!(child);
                 n.fetch_add(size, std::sync::atomic::Ordering::Relaxed);
+                thread_tx.send(format!("{n:?}/{m} completed!\n")).unwrap();
                 println!("{n:?}/{m} completed!");
             })
     }

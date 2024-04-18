@@ -1,52 +1,91 @@
-use std::path::PathBuf;
+#[macro_use]
+extern crate relm4;
 
-use process::MyArgs;
+use dircpy::copy_dir;
+use std::{convert::identity, env, path::PathBuf};
+
 use relm4::{
     gtk::{
         self,
-        prelude::{BoxExt, GtkWindowExt, OrientableExt},
-        Adjustment, FileFilter,
+        prelude::{
+            BoxExt, ButtonExt, CheckButtonExt, EditableExt, EntryBufferExtManual, EntryExt,
+            GtkWindowExt, OrientableExt, TextBufferExt, TextViewExt, WidgetExt,
+        },
+        Adjustment, EntryBuffer, FileFilter,
     },
-    Component, ComponentController, ComponentParts, ComponentSender, Controller, RelmWidgetExt,
-    SimpleComponent,
+    Component, ComponentController, ComponentParts, ComponentSender, Controller, RelmApp,
+    RelmWidgetExt, SimpleComponent, WorkerController,
 };
 use relm4_components::{
     open_button::{OpenButton, OpenButtonSettings},
     open_dialog::OpenDialogSettings,
 };
 
-pub mod process;
+use worker::{AsyncHandler, AsyncHandlerInMsg};
+
+use crate::process::MyArgs;
+
+mod process;
+mod worker;
 
 struct AppModel {
-    open_game: Controller<OpenButton>,
-    game_path: PathBuf,
     open_srt: Controller<OpenButton>,
     srt_path: PathBuf,
+    open_epub: Controller<OpenButton>,
+    epub_path: Option<PathBuf>,
     open_audio: Controller<OpenButton>,
     audio_path: PathBuf,
-    open_epub: Controller<OpenButton>,
-    epub_path: PathBuf,
+    audio_ext: Option<AudioExt>,
+    prefix: EntryBuffer,
+    buffer: gtk::TextBuffer,
+    offset_before: f64,
+    offset_after: f64,
+    show_button: bool,
+    sensitive: bool,
+    worker: WorkerController<AsyncHandler>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum AudioExt {
+    M4b,
+    Mp3,
 }
 
 #[derive(Debug)]
 enum DialogOrigin {
     Audio,
-    Game,
     Srt,
     Epub,
 }
 
 #[derive(Debug)]
-enum AppInMsg {
+enum OffsetDirection {
+    Before,
+    After,
+}
+
+#[derive(Debug)]
+pub enum AppInMsg {
+    Ended,
+    UpdateBuffer(String, bool),
     Recheck,
+    UpdateOffset(OffsetDirection, f64),
     Open(PathBuf, DialogOrigin),
+    StartConversion,
+    StartAudioSplit,
+    Start,
+}
+
+#[derive(Debug)]
+enum AppOutMsg {
+    Scroll,
 }
 
 #[relm4::component]
 impl SimpleComponent for AppModel {
     type Input = AppInMsg;
 
-    type Output = ();
+    type Output = AppOutMsg;
     type Init = u8;
 
     // Initialize the UI.
@@ -55,24 +94,6 @@ impl SimpleComponent for AppModel {
         root: &Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let open_game = OpenButton::builder()
-            .launch(OpenButtonSettings {
-                dialog_settings: OpenDialogSettings {
-                    folder_mode: true,
-                    cancel_label: String::from("Cancel"),
-                    accept_label: String::from("Select"),
-                    create_folders: true,
-                    is_modal: true,
-                    ..OpenDialogSettings::default()
-                },
-                text: "Open folder",
-                recently_opened_files: None,
-                max_recent_files: 0,
-            })
-            .forward(sender.input_sender(), |path| {
-                AppInMsg::Open(path, DialogOrigin::Game)
-            });
-
         let srt_filter = FileFilter::new();
         srt_filter.add_pattern("*.srt");
         srt_filter.set_name(Some("Subtitle files (.srt)"));
@@ -96,9 +117,31 @@ impl SimpleComponent for AppModel {
                 AppInMsg::Open(path, DialogOrigin::Srt)
             });
 
+        let epub_filter = FileFilter::new();
+        epub_filter.add_pattern("*.epub");
+        epub_filter.set_name(Some("Epub Files (.epub)"));
+
+        let open_epub = OpenButton::builder()
+            .launch(OpenButtonSettings {
+                dialog_settings: OpenDialogSettings {
+                    folder_mode: false,
+                    cancel_label: String::from("Cancel"),
+                    accept_label: String::from("Select"),
+                    create_folders: true,
+                    is_modal: true,
+                    // filter:
+                    filters: vec![epub_filter],
+                },
+                text: "Open file",
+                recently_opened_files: None,
+                max_recent_files: 0,
+            })
+            .forward(sender.input_sender(), |path| {
+                AppInMsg::Open(path, DialogOrigin::Epub)
+            });
+
         let audio_filter = FileFilter::new();
         audio_filter.add_pattern("*.mp3");
-        audio_filter.add_pattern("*.ogg");
         audio_filter.add_pattern("*.m4b");
         audio_filter.add_pattern("*.m4a");
         audio_filter.set_name(Some("Audio files (.mp3, .m4b, .m4a)"));
@@ -122,38 +165,23 @@ impl SimpleComponent for AppModel {
                 AppInMsg::Open(path, DialogOrigin::Audio)
             });
 
-        let epub_filter = FileFilter::new();
-        epub_filter.add_pattern("*.epub");
-        epub_filter.set_name(Some("epub files"));
-
-        let open_epub = OpenButton::builder()
-            .launch(OpenButtonSettings {
-                dialog_settings: OpenDialogSettings {
-                    folder_mode: false,
-                    cancel_label: String::from("Cancel"),
-                    accept_label: String::from("Select"),
-                    create_folders: true,
-                    is_modal: true,
-                    // filter:
-                    filters: vec![epub_filter],
-                },
-                text: "Open file",
-                recently_opened_files: None,
-                max_recent_files: 0,
-            })
-            .forward(sender.input_sender(), |path| {
-                AppInMsg::Open(path, DialogOrigin::Epub)
-            });
-
         let model = AppModel {
-            open_game,
+            prefix: EntryBuffer::new(Some("MyAudiobook")),
             open_srt,
             open_audio,
             open_epub,
-            game_path: PathBuf::from(""),
+            audio_ext: None,
+            buffer: gtk::TextBuffer::new(None),
+            epub_path: None,
             srt_path: PathBuf::from(""),
             audio_path: PathBuf::from(""),
-            epub_path: PathBuf::from(""),
+            show_button: false,
+            offset_before: 0.0,
+            offset_after: 0.0,
+            worker: AsyncHandler::builder()
+                .detach_worker(())
+                .forward(sender.input_sender(), identity),
+            sensitive: true,
         };
 
         let widgets = view_output!();
@@ -163,19 +191,86 @@ impl SimpleComponent for AppModel {
 
     fn update(&mut self, msg: Self::Input, sender: ComponentSender<Self>) {
         match msg {
-            AppInMsg::Recheck => todo!(),
-            AppInMsg::Open(path, origin) => match origin {
-                DialogOrigin::Audio => self.audio_path = path,
-                DialogOrigin::Game => self.game_path = path,
-                DialogOrigin::Srt => self.srt_path = path,
-                DialogOrigin::Epub => self.epub_path = path,
+            AppInMsg::Ended => {
+                self.sensitive = true;
+            }
+            AppInMsg::UpdateBuffer(msg, delete) => {
+                if delete {
+                    let (mut start, mut end) = self.buffer.bounds();
+                    self.buffer.delete(&mut start, &mut end);
+                }
+                self.buffer.insert_at_cursor(&msg);
+            }
+            AppInMsg::StartConversion => {
+                self.worker
+                    .emit(AsyncHandlerInMsg::ConvertMP3(self.audio_path.clone()));
+            }
+            AppInMsg::StartAudioSplit => {
+                //TODO fix
+                let mut game_folder = env::current_dir().unwrap();
+                game_folder.push(&self.prefix.text());
+                game_folder.push("game");
+                copy_dir("template", &self.prefix.text()).unwrap();
+
+                let args = MyArgs {
+                    epub: self.epub_path.clone(),
+                    game_folder,
+                    audiobook: self.audio_path.clone(),
+                    subtitle: self.srt_path.clone(),
+                    start_offset: self.offset_before as i32,
+                    end_offset: self.offset_after as i32,
+                    split: true,
+                    show_buggies: true,
+                };
+                self.worker
+                    .emit(AsyncHandlerInMsg::SplitAudio(args, self.audio_path.clone()))
+            }
+            AppInMsg::UpdateOffset(dir, val) => match dir {
+                OffsetDirection::Before => {
+                    self.offset_before = val;
+                }
+                OffsetDirection::After => {
+                    self.offset_after = val;
+                }
             },
+            AppInMsg::Recheck => {
+                self.show_button = self.prefix.length() > 0
+                    && !self.audio_path.as_os_str().is_empty()
+                    && !self.srt_path.as_os_str().is_empty();
+            }
+            AppInMsg::Open(path, origin) => {
+                match origin {
+                    DialogOrigin::Audio => {
+                        if path.extension().unwrap() == "m4b" {
+                            self.audio_ext = Some(AudioExt::M4b);
+                        } else {
+                            self.audio_ext = Some(AudioExt::Mp3);
+                        }
+                        self.audio_path = path
+                    }
+                    DialogOrigin::Srt => self.srt_path = path,
+                    DialogOrigin::Epub => self.epub_path = Some(path),
+                };
+                self.show_button = self.prefix.length() > 0
+                    && !self.audio_path.as_os_str().is_empty()
+                    && !self.srt_path.as_os_str().is_empty();
+            }
+            AppInMsg::Start => {
+                self.sensitive = false;
+                if self.audio_ext == Some(AudioExt::M4b) {
+                    sender.input(AppInMsg::StartConversion);
+                    // self.worker
+                    //     .emit(AsyncHandlerInMsg::ConvertMP3(self.audio_path.clone()));
+                } else {
+                    sender.input(AppInMsg::StartAudioSplit);
+                }
+            }
         }
     }
 
     view! {
         gtk::Window {
-            set_title: Some("Audiobook to Ren'py"),
+            set_title: Some("Audiobook to Renpy"),
             set_default_width: 600,
             set_default_height: 400,
 
@@ -188,21 +283,26 @@ impl SimpleComponent for AppModel {
                     set_spacing: 5,
                     set_margin_all: 5,
                     set_orientation: gtk::Orientation::Horizontal,
+                    #[watch]
+                    set_sensitive: model.sensitive,
                     gtk::Label {
-                        set_label: "Folder to install game in"
+                        set_label: "Name"
 
                     },
-                    append = model.open_game.widget(),
-                    gtk::Label {
-                        #[watch]
-                        set_label: &model.game_path.to_string_lossy()
-                    }
+                    gtk::Entry {
+                        set_buffer: &model.prefix,
+                        connect_changed => AppInMsg::Recheck,
+
+                    },
                 },
+
 
                 gtk::Box {
                     set_spacing: 5,
                     set_margin_all: 5,
                     set_orientation: gtk::Orientation::Horizontal,
+                    #[watch]
+                    set_sensitive: model.sensitive,
                     gtk::Label {
                         set_label: "Path to the .srt file"
 
@@ -217,6 +317,8 @@ impl SimpleComponent for AppModel {
                     set_spacing: 5,
                     set_margin_all: 5,
                     set_orientation: gtk::Orientation::Horizontal,
+                    #[watch]
+                    set_sensitive: model.sensitive,
                     gtk::Label {
                         set_label: "Path to the audio file"
                     },
@@ -231,13 +333,16 @@ impl SimpleComponent for AppModel {
                     set_spacing: 5,
                     set_margin_all: 5,
                     set_orientation: gtk::Orientation::Horizontal,
+                    #[watch]
+                    set_sensitive: model.sensitive,
                     gtk::Label {
-                        set_label: "Path to the epub file (optional)"
+                        set_label: "Path to the epub file (optional, for furigana),"
                     },
                     append = model.open_epub.widget(),
                     gtk::Label {
                         #[watch]
-                        set_label: &model.epub_path.to_string_lossy()
+                        //TODO improve this iirc there’s a option thing in relm dsl
+                        set_label: &model.epub_path.clone().unwrap_or_default().to_string_lossy()
                     }
                 },
 
@@ -245,6 +350,8 @@ impl SimpleComponent for AppModel {
                     set_spacing: 5,
                     set_margin_all: 5,
                     set_orientation: gtk::Orientation::Horizontal,
+                    #[watch]
+                    set_sensitive: model.sensitive,
                     gtk::Label {
                         set_label: "Offsets"
                     },
@@ -253,63 +360,75 @@ impl SimpleComponent for AppModel {
                     relm4::gtk::SpinButton::builder()
                     .adjustment(&Adjustment::new(0.0, -500.0, 500.0, 1.0, 0.0, 0.0))
                     .build(){
-                    },
-                        gtk::Label {
+                        connect_value_changed[sender] => move |x| {
+                            sender.input(AppInMsg::UpdateOffset(OffsetDirection::Before, x.value()))
+                    }},
+                    gtk::Label {
                             set_label: "Before (ms)"
                         }
-                    },
-                gtk::Box {
-                    set_orientation: gtk::Orientation::Vertical,
-                    relm4::gtk::SpinButton::builder()
-                    .adjustment(&Adjustment::new(0.0, -500.0, 500.0, 1.0, 0.0, 0.0))
-                    .build(){
-                    },
-                        gtk::Label {
-                            set_label: "After (ms)"
-                        }
-                    },
-
-                    // append = spin_offset_before,
+                },
+                // gtk::Box {
+                //     set_orientation: gtk::Orientation::Vertical,
+                //     gtk::SpinButton::builder()
+                //     .adjustment(&Adjustment::new(0.0, -500.0, 500.0, 1.0, 0.0, 0.0))
+                //     .build(){
+                //         connect_value_changed[sender] => move |x| {
+                //             sender.input(AppInMsg::UpdateOffset(OffsetDirection::After, x.value()))
+                //         }
+                //     },
+                //         gtk::Label {
+                //             set_label: "After (ms)"
+                //         }
+                //     },
                 },
 
-                //   append = if model.show_button {
-                // gtk::Button::with_label("Generate Deck !") {
-                //     connect_clicked[sender] => move |_| {
-                //         sender.input(AppInMsg::Start);
-                //     }
-                // }}
+                append = if model.show_button {
+                    gtk::Button::with_label("Generate Deck !") {
+                        #[watch]
+                        set_sensitive: model.sensitive,
+                        connect_clicked[sender] => move |_| {
+                            sender.input(AppInMsg::Start);
+                        }
+                }} else {
+                    gtk::Label{
+                        set_label: "Please fill all mandatory fields"
+                    }
+                },
+
+
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_margin_all: 5,
+
+                    gtk::ScrolledWindow {
+                        set_min_content_height: 380,
+
+                        #[wrap(Some)]
+                        set_child = &gtk::TextView {
+                            set_buffer: Some(&model.buffer),
+                            set_editable: false,
+
+                            // #[watch]
+                            // set_visible: model.file_name.is_some(),
+                        },
+                    }},
                 // else if model.show_indicator {
                 //     gtk::Spinner {
                 //         set_spinning: true,
                 //     }
                 // }
-                // else {
-                //     gtk::Label{
-                //         set_label: "Please fill all three fields"
-                //     }
-                // },
 
             }
         }
     }
 }
 
+// #[tokio::main]
 fn main() {
     // rayon::ThreadPoolBuilder::new()
     //     .num_threads(4)
     //     .build_global()
     //     .unwrap();
-    let args = MyArgs {
-        game_folder: String::from("test/game"),
-        audiobook: String::from("opuss.ogg"),
-        subtitle: String::from("p4v3.srt"),
-        epub: None,
-        split: true,
-        show_buggies: false,
-        start_offset: 0,
-        end_offset: 0,
-    };
-    process::process(args);
-    // let app = RelmApp::new("relm4.test.simple");
-    // app.run::<AppModel>(0);
+    let app = RelmApp::new("relm4.test.simple");
+    app.run::<AppModel>(0);
 }
