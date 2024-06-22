@@ -1,6 +1,5 @@
 * AudioTextSync To Ren’Py
-
-Turn any of your [[https://github.com/kanjieater/AudiobookTextSync][AudiobookTextSync]] subtitle files + audio + epub combo into a visual novel, thanks to Ren’Py, with all advantages that come with it like (not exhaustive or exclusive to VNs):
+Turn any of your [[https://github.com/kanjieater/SubPlz][SubPlz]] subtitle files + audio + epub combo into a visual novel, thanks to Ren’Py, with all advantages that come with it like (not exhaustive or exclusive to VNs):
 - Saving!
 - Loading!!!
 - Play the audiobook at your own pace
@@ -12,20 +11,18 @@ Turn any of your [[https://github.com/kanjieater/AudiobookTextSync][AudiobookTex
 - Free shot of dopamine every time you click to the next line, keeping your tiktok-corroded brain active and focused on the book
 - Clipboard Sync by design, no need to bother with textractor
 - [[https://sync.renpy.org/][Share save accross computers?]]
-Note that many of these things can be achieved with mpv+extensions+shortcuts, but hey, a VN’s a VN, it’s more convenient in many ways.
+- Images integration from the epub file (experimental !!)
+Note that many of these things can be achieved with mpv+extensions+shortcuts if you prefer that way.
 
 * How To Use
-
-All instructions can now be found [here](https://www.asayake.xyz/posts/audiobooksync/)
-
+All instructions can now be found [[https://www.asayake.xyz/posts/audiobooksync/][here]]
 * Status
-
-This is "beta" software, it has some flaws that aren’t really fixable (especially on subtitles generated on older version of AudioTextSync), but it is very much usable. Most notably sometimes a line voice will cover slightly more than the displayed text, and the next line will have a way shorter one to compensate.
-
-Feature wise, it is more or less complete, I am currently investigating adding illustrations from the epub, but this might be a risky can of worms when it comes to spoilers, so I’m unsure what to do yet on that point (nonetheless it’ll be flagged behind an option, for people who’d rather not take the risk). This, improving the renpy template and possibly mitigating the issue above are the only things that might change, so despite being "beta", it’s also "stable".
-
+Thanks to the improvements in the newer versions of SubPlz, this is essentially close to a complete release now, some things are left to more experimentation (like inserting images from epub), but aside from that results are now very accurate.
 * Building
-Assuming rust installed. If not [[https://rustup.rs/][Rustup]]
+Assuming rust installed. If not, install it via [[https://rustup.rs/][Rustup]], then:
+
+Make sure you have GTK installed as well.
 #+begin_src bash
 cargo build --release
 #+end_src
+

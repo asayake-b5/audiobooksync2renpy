@@ -18,7 +18,7 @@ use std::{
 };
 
 const CHUNK_SIZE: usize = 25;
-const SILENCE_OGG: &[u8] = include_bytes!("../silence.ogg");
+// const SILENCE_OGG: &[u8] = include_bytes!("../silence.ogg");
 const SILENCE_MP3: &[u8] = include_bytes!("../silence.mp3");
 
 fn timestamp_to_str(t: Timestamp) -> String {
@@ -128,7 +128,7 @@ pub struct MyArgs {
     pub split: bool,
     pub show_buggies: bool,
     pub start_offset: i32,
-    pub end_offset: i32,
+    pub _end_offset: i32,
 }
 
 pub fn process(args: MyArgs, thread_tx: Sender<String>) {
@@ -322,7 +322,7 @@ pub fn process(args: MyArgs, thread_tx: Sender<String>) {
                     panic!("Unsupported OS possibly.")
                 };
 
-                let child = command.args(&args).output().unwrap();
+                let _ = command.args(&args).output().unwrap();
                 // dbg!(child);
                 n.fetch_add(size, std::sync::atomic::Ordering::Relaxed);
                 thread_tx.send(format!("{n:?}/{m} completed!\n")).unwrap();

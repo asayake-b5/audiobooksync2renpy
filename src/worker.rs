@@ -1,20 +1,19 @@
 use std::{
-    fs,
     io::Read,
     path::PathBuf,
-    process::{self, Command, Stdio},
+    process::{Command, Stdio},
     sync::mpsc::{self, Receiver, Sender},
     thread,
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use regex::Regex;
-use relm4::gtk::AccessibleRole::Note;
 use relm4::{ComponentSender, Worker};
-use srtlib::Subtitles;
 
-use crate::process::{process, MyArgs};
-use crate::{AppInMsg, AudioExt};
+use crate::AppInMsg;
+use crate::{
+    epub_process,
+    process::{process, MyArgs},
+};
 
 pub struct AsyncHandler;
 
@@ -49,7 +48,7 @@ impl AsyncHandler {
     ) {
         let regex = Regex::new(r"size=.* time=(.*?) .* speed=(.*x)").unwrap();
         let (tx, rx): (Sender<String>, Receiver<String>) = mpsc::channel();
-        let thread_tx = tx.clone();
+        // let thread_tx = tx.clone();
         let audio_ext = audio_path.extension().unwrap_or_default();
         //TODO if can be removed probably
         if audio_ext == "m4b" {
@@ -72,7 +71,7 @@ impl AsyncHandler {
                 "-vn",
                 "-acodec",
                 "libmp3lame",
-                &converted_path.as_os_str().to_str().unwrap_or(""),
+                converted_path.as_os_str().to_str().unwrap_or(""),
             ]);
             let mut child = command.spawn().unwrap();
             let mut stderr = child.stderr.take().unwrap();
@@ -125,13 +124,30 @@ impl AsyncHandler {
         let (tx, rx): (Sender<String>, Receiver<String>) = mpsc::channel();
         let thread_tx = tx.clone();
         thread::spawn(move || {
+            let game_folder = args.game_folder.clone();
+            let epub = args.epub.clone();
             process(args, thread_tx.clone());
+            if let Some(ep) = epub {
+                thread_tx
+                    .send(String::from("Trying to insert epub images in the script"))
+                    .unwrap();
+                let mut epubimager = epub_process::EpubImager::new(ep, game_folder);
+                let remaining = epubimager.do_the_epub_thing();
+                if remaining > 0 {
+                    thread_tx
+                        .send(format!(
+                            "{remaining} images were not implemented in the script"
+                        ))
+                        .unwrap();
+                }
+            }
+
             thread_tx.send(String::from("STOP")).unwrap();
         });
         loop {
             if let Ok(msg) = rx.recv() {
                 if msg == "STOP" {
-                    AsyncHandler::update_buffer("Extracting done!", false, sender);
+                    AsyncHandler::update_buffer("Processing done!", false, sender);
                     sender.output(AppInMsg::Ended).unwrap();
                     break;
                 } else {

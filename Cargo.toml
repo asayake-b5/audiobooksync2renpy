@@ -21,3 +21,4 @@ textdistance = "1.0.2"
 regex = "1.10.2"
 dircpy = "0.3.15"
 itertools = "0.12.1"
+image = { version = "0.25.1", features = ["default-formats", "jpeg", "png", "gif"]}

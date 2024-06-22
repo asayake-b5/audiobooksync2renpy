@@ -1,4 +1,3 @@
-#[macro_use]
 extern crate relm4;
 
 use dircpy::copy_dir;
@@ -8,8 +7,8 @@ use relm4::{
     gtk::{
         self,
         prelude::{
-            BoxExt, ButtonExt, CheckButtonExt, EditableExt, EntryBufferExtManual, EntryExt,
-            GtkWindowExt, OrientableExt, TextBufferExt, TextViewExt, WidgetExt,
+            BoxExt, ButtonExt, EditableExt, EntryBufferExtManual, EntryExt, GtkWindowExt,
+            OrientableExt, TextBufferExt, TextViewExt, WidgetExt,
         },
         Adjustment, EntryBuffer, FileFilter,
     },
@@ -25,6 +24,7 @@ use worker::{AsyncHandler, AsyncHandlerInMsg};
 
 use crate::process::MyArgs;
 
+mod epub_process;
 mod process;
 mod worker;
 
@@ -52,14 +52,14 @@ enum AudioExt {
 }
 
 #[derive(Debug)]
-enum DialogOrigin {
+pub enum DialogOrigin {
     Audio,
     Srt,
     Epub,
 }
 
 #[derive(Debug)]
-enum OffsetDirection {
+pub enum OffsetDirection {
     Before,
     After,
 }
@@ -77,7 +77,7 @@ pub enum AppInMsg {
 }
 
 #[derive(Debug)]
-enum AppOutMsg {
+pub enum AppOutMsg {
     Scroll,
 }
 
@@ -218,7 +218,7 @@ impl SimpleComponent for AppModel {
                     audiobook: self.audio_path.clone(),
                     subtitle: self.srt_path.clone(),
                     start_offset: self.offset_before as i32,
-                    end_offset: self.offset_after as i32,
+                    _end_offset: self.offset_after as i32,
                     split: true,
                     show_buggies: true,
                 };
@@ -336,7 +336,7 @@ impl SimpleComponent for AppModel {
                     #[watch]
                     set_sensitive: model.sensitive,
                     gtk::Label {
-                        set_label: "Path to the epub file (optional, for furigana),"
+                        set_label: "Path to the epub file (optional, for furigana and importing images),"
                     },
                     append = model.open_epub.widget(),
                     gtk::Label {
