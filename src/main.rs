@@ -39,7 +39,8 @@ struct AppModel {
     prefix: EntryBuffer,
     buffer: gtk::TextBuffer,
     offset_before: f64,
-    offset_after: f64,
+    gain: f64,
+    speed: f64,
     show_button: bool,
     sensitive: bool,
     worker: WorkerController<AsyncHandler>,
@@ -69,7 +70,7 @@ pub enum AppInMsg {
     Ended,
     UpdateBuffer(String, bool),
     Recheck,
-    UpdateOffset(OffsetDirection, f64),
+    UpdateOffset(f64),
     Open(PathBuf, DialogOrigin),
     StartConversion,
     StartAudioSplit,
@@ -177,11 +178,12 @@ impl SimpleComponent for AppModel {
             audio_path: PathBuf::from(""),
             show_button: false,
             offset_before: 0.0,
-            offset_after: 0.0,
             worker: AsyncHandler::builder()
                 .detach_worker(())
                 .forward(sender.input_sender(), identity),
             sensitive: true,
+            gain: 1.0,
+            speed: 1.0,
         };
 
         let widgets = view_output!();
@@ -208,9 +210,9 @@ impl SimpleComponent for AppModel {
             AppInMsg::StartAudioSplit => {
                 //TODO fix
                 let mut game_folder = env::current_dir().unwrap();
-                game_folder.push(&self.prefix.text());
+                game_folder.push(self.prefix.text());
                 game_folder.push("game");
-                copy_dir("template", &self.prefix.text()).unwrap();
+                copy_dir("template", self.prefix.text()).unwrap();
 
                 let args = MyArgs {
                     epub: self.epub_path.clone(),
@@ -218,21 +220,15 @@ impl SimpleComponent for AppModel {
                     audiobook: self.audio_path.clone(),
                     subtitle: self.srt_path.clone(),
                     start_offset: self.offset_before as i32,
-                    _end_offset: self.offset_after as i32,
                     split: true,
                     show_buggies: true,
                 };
                 self.worker
                     .emit(AsyncHandlerInMsg::SplitAudio(args, self.audio_path.clone()))
             }
-            AppInMsg::UpdateOffset(dir, val) => match dir {
-                OffsetDirection::Before => {
-                    self.offset_before = val;
-                }
-                OffsetDirection::After => {
-                    self.offset_after = val;
-                }
-            },
+            AppInMsg::UpdateOffset(val) => {
+                self.offset_before = val;
+            }
             AppInMsg::Recheck => {
                 self.show_button = self.prefix.length() > 0
                     && !self.audio_path.as_os_str().is_empty()
@@ -361,7 +357,7 @@ impl SimpleComponent for AppModel {
                     .adjustment(&Adjustment::new(0.0, -500.0, 500.0, 1.0, 0.0, 0.0))
                     .build(){
                         connect_value_changed[sender] => move |x| {
-                            sender.input(AppInMsg::UpdateOffset(OffsetDirection::Before, x.value()))
+                            sender.input(AppInMsg::UpdateOffset(x.value()))
                     }},
                     gtk::Label {
                             set_label: "Before (ms)"

@@ -128,7 +128,6 @@ pub struct MyArgs {
     pub split: bool,
     pub show_buggies: bool,
     pub start_offset: i32,
-    pub _end_offset: i32,
 }
 
 pub fn process(args: MyArgs, thread_tx: Sender<String>) {
