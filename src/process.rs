@@ -17,7 +17,7 @@ use std::{
     },
 };
 
-const CHUNK_SIZE: usize = 25;
+const CHUNK_SIZE: usize = 10;
 // const SILENCE_OGG: &[u8] = include_bytes!("../silence.ogg");
 const SILENCE_MP3: &[u8] = include_bytes!("../silence.mp3");
 
@@ -88,8 +88,16 @@ fn prepare_ffmpeg_command(
     count: usize,
     s: &[Subtitle],
     game_folder: &str,
+    gain: f64,
+    speed: f64,
 ) -> Vec<String> {
     let mut r = Vec::with_capacity(count * 10);
+    let filter_str = format!("atempo={speed},volume={gain}");
+    let filter = if gain != 1.0 && speed != 1.0 {
+        ["-af".to_string(), filter_str.clone()]
+    } else {
+        ["-c".to_string(), "copy".to_string()]
+    };
     println!("{}", s.len());
     //TODO off by one here?
     for i in 0..count {
@@ -103,10 +111,9 @@ fn prepare_ffmpeg_command(
             std::fs::write(&path, SILENCE_MP3).unwrap();
             continue;
         }
+        r.extend(filter.clone());
         r.extend(
             [
-                "-c",
-                "copy",
                 "-ss",
                 &s[i].start_time.to_string().replace(',', "."),
                 "-to",
@@ -128,6 +135,8 @@ pub struct MyArgs {
     pub split: bool,
     pub show_buggies: bool,
     pub start_offset: i32,
+    pub speed: f64,
+    pub gain: f64,
 }
 
 pub fn process(args: MyArgs, thread_tx: Sender<String>) {
@@ -275,8 +284,14 @@ pub fn process(args: MyArgs, thread_tx: Sender<String>) {
             // .par_chunks()
             .for_each(move |(i, s)| {
                 let size = s.len();
-                let prepared =
-                    prepare_ffmpeg_command(i * size, size, s, &args.game_folder.to_string_lossy()); //TODO
+                let prepared = prepare_ffmpeg_command(
+                    i * size,
+                    size,
+                    s,
+                    &args.game_folder.to_string_lossy(),
+                    args.gain,
+                    args.speed,
+                ); //TODO
                 if !contin.load(Ordering::Relaxed) {
                     return;
                 }
@@ -292,10 +307,10 @@ pub fn process(args: MyArgs, thread_tx: Sender<String>) {
                         "-hide_banner".to_string(),
                         "-loglevel".to_string(),
                         "error".to_string(),
-                        "-vn".to_string(),
                         "-y".to_string(),
                         "-i".to_string(),
                         args.audiobook.to_string_lossy().to_string(),
+                        "-vn".to_string(),
                     ]
                     .iter()
                     .chain(prepared.iter())
@@ -308,10 +323,10 @@ pub fn process(args: MyArgs, thread_tx: Sender<String>) {
                         "-hide_banner".to_string(),
                         "-loglevel".to_string(),
                         "error".to_string(),
-                        "-vn".to_string(),
                         "-y".to_string(),
                         "-i".to_string(),
                         args.audiobook.to_string_lossy().to_string(),
+                        "-vn".to_string(),
                     ]
                     .iter()
                     .chain(prepared.iter())

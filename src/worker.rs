@@ -115,7 +115,7 @@ impl AsyncHandler {
     fn split_audio(&self, mut args: MyArgs, path: PathBuf, sender: &ComponentSender<AsyncHandler>) {
         let audio_ext = path.extension().unwrap_or_default();
         // let path =
-        if audio_ext == "m4b" {
+        if audio_ext == "m4b" && args.gain == 1.0 && args.speed == 1.0 {
             let mut converted_path = path.clone();
             converted_path.set_extension("mp3");
             args.audiobook = converted_path;
