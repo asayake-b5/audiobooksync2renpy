@@ -1,6 +1,7 @@
 use std::{
+    ffi::OsStr,
     io::Read,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::mpsc::{self, Receiver, Sender},
     thread,
@@ -19,7 +20,7 @@ pub struct AsyncHandler;
 
 #[derive(Debug)]
 pub enum AsyncHandlerInMsg {
-    ConvertMP3(PathBuf),
+    ConvertMP3(PathBuf, f64, f64),
     SplitAudio(MyArgs, PathBuf),
 }
 
@@ -43,6 +44,8 @@ impl AsyncHandler {
     fn convert_mp3(
         &self,
         audio_path: PathBuf,
+        gain: f64,
+        speed: f64,
         // audio_ext: Option<crate::AudioExt>,
         sender: &ComponentSender<AsyncHandler>,
     ) {
@@ -53,6 +56,18 @@ impl AsyncHandler {
         //TODO if can be removed probably
         if audio_ext == "m4b" {
             let mut converted_path = audio_path.clone();
+            let new_file_name = format!(
+                "{}-{:.4}-{:.4}",
+                converted_path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_str()
+                    .unwrap_or("error"),
+                gain.to_string().replace(".", "_"),
+                speed.to_string().replace(".", "_")
+            );
+            // converted_path.set_file_name(converted_path.file_name())
+            converted_path.set_file_name(new_file_name);
             converted_path.set_extension("mp3");
             AsyncHandler::update_buffer(
                 "Converting to mp3, this'll take a few minutes...",
@@ -66,11 +81,19 @@ impl AsyncHandler {
                 "quiet",
                 "-n", //TODO reeeeeeeeeeemove someday
                 // "-y",
+                "-vn",
                 "-i",
                 audio_path.as_os_str().to_str().unwrap_or(""),
-                "-vn",
-                "-acodec",
-                "libmp3lame",
+                "-af",
+                &format!("atempo={speed},volume={gain}"),
+                // &format!(
+                //     "\"atempo={},volume={}\"",
+                //     speed.to_string().replace(",", "."),
+                //     gain.to_string().replace(",", ".")
+                // ),
+                // "\"atempo=1.5,volume=1.5\"",
+                // "-acodec",
+                // "libmp3lame",
                 converted_path.as_os_str().to_str().unwrap_or(""),
             ]);
             let mut child = command.spawn().unwrap();
@@ -114,11 +137,27 @@ impl AsyncHandler {
 
     fn split_audio(&self, mut args: MyArgs, path: PathBuf, sender: &ComponentSender<AsyncHandler>) {
         let audio_ext = path.extension().unwrap_or_default();
+        println!("{audio_ext:?}",);
+
         // let path =
         if audio_ext == "m4b" {
             let mut converted_path = path.clone();
+            let new_file_name = format!(
+                "{}-{:.4}-{:.4}",
+                converted_path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_str()
+                    .unwrap_or("error"),
+                args.gain.to_string().replace(".", "_"),
+                args.speed.to_string().replace(".", "_")
+            );
+            converted_path.set_file_name(new_file_name);
+            println!("{converted_path:?}",);
+
             converted_path.set_extension("mp3");
             args.audiobook = converted_path;
+            println!("{}", args.audiobook.clone().to_str().unwrap());
         }
 
         let (tx, rx): (Sender<String>, Receiver<String>) = mpsc::channel();
@@ -173,8 +212,8 @@ impl Worker for AsyncHandler {
                 self.split_audio(args, path, &sender);
             }
 
-            AsyncHandlerInMsg::ConvertMP3(audio_path) => {
-                self.convert_mp3(audio_path, &sender);
+            AsyncHandlerInMsg::ConvertMP3(audio_path, gain, speed) => {
+                self.convert_mp3(audio_path, gain, speed, &sender);
                 sender.output(AppInMsg::StartAudioSplit).unwrap();
             }
         }

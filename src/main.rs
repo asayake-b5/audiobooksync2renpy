@@ -71,8 +71,10 @@ pub enum AppInMsg {
     UpdateBuffer(String, bool),
     Recheck,
     UpdateOffset(f64),
+    UpdateGain(f64),
+    UpdateSpeed(f64),
     Open(PathBuf, DialogOrigin),
-    StartConversion,
+    StartConversion(f64, f64),
     StartAudioSplit,
     Start,
 }
@@ -203,9 +205,12 @@ impl SimpleComponent for AppModel {
                 }
                 self.buffer.insert_at_cursor(&msg);
             }
-            AppInMsg::StartConversion => {
-                self.worker
-                    .emit(AsyncHandlerInMsg::ConvertMP3(self.audio_path.clone()));
+            AppInMsg::StartConversion(gain, speed) => {
+                self.worker.emit(AsyncHandlerInMsg::ConvertMP3(
+                    self.audio_path.clone(),
+                    gain,
+                    speed,
+                ));
             }
             AppInMsg::StartAudioSplit => {
                 //TODO fix
@@ -219,7 +224,9 @@ impl SimpleComponent for AppModel {
                     game_folder,
                     audiobook: self.audio_path.clone(),
                     subtitle: self.srt_path.clone(),
-                    start_offset: self.offset_before as i32,
+                    start_offset: self.offset_before as i64,
+                    speed: self.speed,
+                    gain: self.gain,
                     split: true,
                     show_buggies: true,
                 };
@@ -228,6 +235,12 @@ impl SimpleComponent for AppModel {
             }
             AppInMsg::UpdateOffset(val) => {
                 self.offset_before = val;
+            }
+            AppInMsg::UpdateGain(val) => {
+                self.gain = val;
+            }
+            AppInMsg::UpdateSpeed(val) => {
+                self.speed = val;
             }
             AppInMsg::Recheck => {
                 self.show_button = self.prefix.length() > 0
@@ -254,7 +267,7 @@ impl SimpleComponent for AppModel {
             AppInMsg::Start => {
                 self.sensitive = false;
                 if self.audio_ext == Some(AudioExt::M4b) {
-                    sender.input(AppInMsg::StartConversion);
+                    sender.input(AppInMsg::StartConversion(self.gain, self.speed));
                     // self.worker
                     //     .emit(AsyncHandlerInMsg::ConvertMP3(self.audio_path.clone()));
                 } else {
@@ -351,32 +364,58 @@ impl SimpleComponent for AppModel {
                     gtk::Label {
                         set_label: "Offsets"
                     },
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            relm4::gtk::SpinButton::builder()
+                            .adjustment(&Adjustment::new(0.0, -500.0, 500.0, 1.0, 0.0, 0.0))
+                            .build(){
+                                connect_value_changed[sender] => move |x| {
+                                    sender.input(AppInMsg::UpdateOffset(x.value()))
+                            }},
+                            gtk::Label {
+                                    set_label: "Before (ms)"
+                                }
+                        },
+                },
+
                 gtk::Box {
-                    set_orientation: gtk::Orientation::Vertical,
-                    relm4::gtk::SpinButton::builder()
-                    .adjustment(&Adjustment::new(0.0, -500.0, 500.0, 1.0, 0.0, 0.0))
-                    .build(){
-                        connect_value_changed[sender] => move |x| {
-                            sender.input(AppInMsg::UpdateOffset(x.value()))
-                    }},
+                    set_spacing: 5,
+                    set_margin_all: 5,
+                    set_orientation: gtk::Orientation::Horizontal,
+                    #[watch]
+                    set_sensitive: model.sensitive,
                     gtk::Label {
-                            set_label: "Before (ms)"
-                        }
+                        set_label: "Audio Adjustments (1.0 = 100%, 1.5 = 150% and so on)"
+                    },
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            relm4::gtk::SpinButton::builder()
+                            .adjustment(&Adjustment::new(1.0, 0.0, 5.0, 0.1, 0.0, 0.0))
+                            .digits(2)
+                            .build(){
+                                connect_value_changed[sender] => move |x| {
+                                    sender.input(AppInMsg::UpdateGain(x.value()))
+                            }},
+                            gtk::Label {
+                                    set_label: "Volume"
+                                }
+                        },
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            relm4::gtk::SpinButton::builder()
+                            .adjustment(&Adjustment::new(1.0, 0.0, 3.0, 0.01, 0.0, 0.0))
+                            .digits(2)
+                            .build(){
+                                connect_value_changed[sender] => move |x| {
+                                    sender.input(AppInMsg::UpdateSpeed(x.value()))
+                            }},
+                            gtk::Label {
+                                    set_label: "Speed"
+                                }
+                        },
+
                 },
-                // gtk::Box {
-                //     set_orientation: gtk::Orientation::Vertical,
-                //     gtk::SpinButton::builder()
-                //     .adjustment(&Adjustment::new(0.0, -500.0, 500.0, 1.0, 0.0, 0.0))
-                //     .build(){
-                //         connect_value_changed[sender] => move |x| {
-                //             sender.input(AppInMsg::UpdateOffset(OffsetDirection::After, x.value()))
-                //         }
-                //     },
-                //         gtk::Label {
-                //             set_label: "After (ms)"
-                //         }
-                //     },
-                },
+
 
                 append = if model.show_button {
                     gtk::Button::with_label("Generate Deck !") {
@@ -421,10 +460,11 @@ impl SimpleComponent for AppModel {
 
 // #[tokio::main]
 fn main() {
-    // rayon::ThreadPoolBuilder::new()
-    //     .num_threads(4)
-    //     .build_global()
-    //     .unwrap();
-    let app = RelmApp::new("relm4.test.simple");
+    let count = std::thread::available_parallelism().unwrap().get();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(count / 2)
+        .build_global()
+        .unwrap();
+    let app = RelmApp::new("audiobook.renpy");
     app.run::<AppModel>(0);
 }

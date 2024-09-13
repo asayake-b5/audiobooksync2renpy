@@ -127,10 +127,13 @@ pub struct MyArgs {
     pub epub: Option<PathBuf>,
     pub split: bool,
     pub show_buggies: bool,
-    pub start_offset: i32,
+    pub start_offset: i64,
+    pub speed: f64,
+    pub gain: f64,
 }
 
 pub fn process(args: MyArgs, thread_tx: Sender<String>) {
+    dbg!(&args.audiobook);
     let mut rubies = None;
 
     let gch = Getch::new();
@@ -190,9 +193,18 @@ pub fn process(args: MyArgs, thread_tx: Sender<String>) {
         rubies = Some(rubies_2);
     }
 
-    let mut subs = Subtitles::parse_from_file(args.subtitle, Some("utf8"))
-        .unwrap()
-        .to_vec();
+    let mut subs = Subtitles::parse_from_file(args.subtitle, Some("utf8")).unwrap();
+
+    for sub in &mut subs {
+        let (a, b, c, d) = sub.start_time.get();
+        let start_millis = srtlib::Timestamp::convert_to_milliseconds(a, b, c, d);
+        let (a, b, c, d) = sub.end_time.get();
+        let end_millis = srtlib::Timestamp::convert_to_milliseconds(a, b, c, d);
+        sub.start_time = Timestamp::from_milliseconds((start_millis as f64 / args.speed) as u32);
+        sub.end_time = Timestamp::from_milliseconds((end_millis as f64 / args.speed) as u32);
+    }
+
+    let mut subs = subs.to_vec();
 
     subs.sort();
     let mintime = Timestamp::new(0, 0, 0, args.start_offset.unsigned_abs() as u16);
