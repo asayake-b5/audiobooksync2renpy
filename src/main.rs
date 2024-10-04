@@ -28,6 +28,18 @@ mod epub_process;
 mod process;
 mod worker;
 
+pub fn update_save_folder(prefix: &str, game_path: &PathBuf) {
+    let mut game_path = game_path.clone();
+    game_path.push("options.rpy");
+    if let Ok(options_file) = std::fs::read_to_string(&game_path) {
+        let options_file = options_file.replace(
+            "AudiobookToRenpy-1689430246",
+            &prefix.to_string().replace(" ", "-"),
+        );
+        std::fs::write(&game_path, &options_file).unwrap();
+    }
+}
+
 struct AppModel {
     open_srt: Controller<OpenButton>,
     srt_path: PathBuf,
@@ -218,7 +230,10 @@ impl SimpleComponent for AppModel {
                 game_folder.push(self.prefix.text());
                 game_folder.push("game");
                 copy_dir("template", self.prefix.text()).unwrap();
-
+                update_save_folder(
+                    &self.prefix.text().to_string().replace(" ", "_"),
+                    &game_folder,
+                );
                 let args = MyArgs {
                     epub: self.epub_path.clone(),
                     game_folder,
